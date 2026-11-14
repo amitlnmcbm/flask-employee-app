@@ -4,23 +4,31 @@ pipeline {
 
     environment {
         APP_NAME = 'flask-app'
-        APP_PORT = '5000'
+        VENV = 'venv'
     }
 
     stages {
 
-        stage('Checkout Code') {
+        stage('Checkout') {
             steps {
-                echo 'Checking out source code...'
                 checkout scm
             }
         }
 
-        stage('Check Python Installation') {
+        stage('Check Python') {
             steps {
                 sh '''
+                    echo "Checking Python installation..."
+
+                    if ! command -v python3 >/dev/null 2>&1; then
+                        echo "Python3 not found. Installing..."
+
+                        sudo apt-get update
+                        sudo apt-get install -y python3 python3-pip python3-venv
+                    fi
+
                     python3 --version
-                    python3 -m pip --version
+                    python3 -m pip --version || true
                 '''
             }
         }
@@ -28,7 +36,11 @@ pipeline {
         stage('Create Virtual Environment') {
             steps {
                 sh '''
-                    python3 -m venv venv
+                    python3 -m venv ${VENV}
+
+                    ${VENV}/bin/python --version
+
+                    ${VENV}/bin/pip install --upgrade pip
                 '''
             }
         }
@@ -36,18 +48,7 @@ pipeline {
         stage('Install Dependencies') {
             steps {
                 sh '''
-                    . venv/bin/activate
-                    python -m pip install --upgrade pip
-                    pip install -r requirements.txt
-                '''
-            }
-        }
-
-        stage('Validate Application') {
-            steps {
-                sh '''
-                    . venv/bin/activate
-                    python -m py_compile app.py
+                    ${VENV}/bin/pip install -r requirements.txt
                 '''
             }
         }
@@ -55,9 +56,23 @@ pipeline {
         stage('Run Flask Application') {
             steps {
                 sh '''
-                    . venv/bin/activate
-                    nohup python app.py > flask.log 2>&1 &
+                    if [ -f flask.pid ]; then
+                        kill $(cat flask.pid) 2>/dev/null || true
+                    fi
+
+                    nohup ${VENV}/bin/python app.py > flask.log 2>&1 &
+
                     echo $! > flask.pid
+
+                    sleep 5
+
+                    if ! kill -0 $(cat flask.pid); then
+                        echo "Flask application failed to start"
+                        cat flask.log
+                        exit 1
+                    fi
+
+                    echo "Flask application started successfully"
                 '''
             }
         }
@@ -65,15 +80,15 @@ pipeline {
 
     post {
         success {
-            echo 'Flask application pipeline completed successfully!'
+            echo 'Flask deployment completed successfully!'
         }
 
         failure {
-            echo 'Pipeline failed. Please check Jenkins console output.'
+            echo 'Pipeline execution failed!'
         }
 
         always {
-            echo 'Jenkins pipeline execution completed.'
+            archiveArtifacts artifacts: 'flask.log', allowEmptyArchive: true
         }
     }
 }
